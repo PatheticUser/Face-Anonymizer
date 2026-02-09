@@ -81,17 +81,7 @@ Contributions, issues, and feature requests are welcome! Feel free to check the 
 5. Push (`git push origin feature-name`)
 6. Open a pull request
 
----
 
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgements
-
-* [OpenCV](https://opencv.org/) for face detection and image processing.
-* Inspired by the need for privacy-first media handling tools.
-
-```
