@@ -1,62 +1,105 @@
 import cv2
-import numpy as np
+import threading
+from ultralytics import YOLO
 
-cap = cv2.VideoCapture(0)
-print("Program started")
+# -------------------------------
+# YOLO11 Model (nano)
+# -------------------------------
+# Note: use a YOLO11 model that includes 'person' class; we will filter faces only.
+# If you have a face-only YOLO model, use that instead.
+model = YOLO("yolo11n.pt")  # nano model for CPU
 
-if not cap.isOpened():
-    print("Camera not detected")
-    exit()
+# -------------------------------
+# Webcam capture thread
+# -------------------------------
+class WebcamStream:
+    def __init__(self, src=0, width=640, height=360):
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.ret = False
+        self.frame = None
+        self.stopped = False
+        self.lock = threading.Lock()
+        threading.Thread(target=self.update, daemon=True).start()
 
-colors = {
-    "Green": ([35, 50, 50], [85, 255, 255]),
-    "Yellow": ([20, 100, 100], [30, 255, 255]),
-    "Red1": ([0, 120, 70], [10, 255, 255]),
-    "Red2": ([170, 120, 70], [180, 255, 255]),
-    "White": ([0, 0, 200], [180, 40, 255])
-}
+    def update(self):
+        while not self.stopped:
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            with self.lock:
+                self.ret = ret
+                self.frame = frame
+
+    def read(self):
+        with self.lock:
+            return self.ret, self.frame.copy() if self.frame is not None else None
+
+    def release(self):
+        self.stopped = True
+        self.cap.release()
+
+# -------------------------------
+# Anonymization function (pixelate)
+# -------------------------------
+def pixelate(face_roi, blocks=15):
+    # Shrink face
+    h, w = face_roi.shape[:2]
+    temp = cv2.resize(face_roi, (blocks, blocks), interpolation=cv2.INTER_LINEAR)
+    # Scale back to original size
+    pixelated = cv2.resize(temp, (w, h), interpolation=cv2.INTER_NEAREST)
+    return pixelated
+
+# -------------------------------
+# Initialize webcam
+# -------------------------------
+stream = WebcamStream()
+frame_skip = 3   # YOLO every 3 frames
+frame_count = 0
+last_results = None
+
+print("YOLO Face Anonymizer started")
 
 while True:
-    ret, frame = cap.read()
+    ret, frame = stream.read()
     if not ret:
-        print("Failed to grab frame")
-        break
+        continue
 
-    # Convert BGR → HSV (better for color detection)
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Resize frame for speed
+    frame_resized = cv2.resize(frame, (640, 360))
 
-    # Green color range (tunable)
-    lower_green = np.array([35, 50, 50])
-    upper_green = np.array([85, 255, 255])
+    # Run YOLO every N frames
+    if frame_count % frame_skip == 0:
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        results = model(frame_rgb)[0]
+        last_results = results
 
-    # Create mask
-    mask = cv2.inRange(hsv, lower_green, upper_green)
+    annotated_frame = frame_resized.copy()
 
-    # Noise removal
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, kernel)
+    # Process YOLO detections
+    if last_results is not None:
+        boxes = last_results.boxes.xyxy.cpu().numpy()  # xyxy format
+        classes = last_results.boxes.cls.cpu().numpy()  # class IDs
+        for i, cls in enumerate(classes):
+            # Filter only 'person' class (YOLO COCO class 0)
+            if int(cls) == 0:
+                x1, y1, x2, y2 = boxes[i].astype(int)
+                # Clip coordinates
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(annotated_frame.shape[1]-1, x2), min(annotated_frame.shape[0]-1, y2)
+                face_roi = annotated_frame[y1:y2, x1:x2]
+                if face_roi.size == 0:
+                    continue
+                # Pixelate face
+                anonymized_face = pixelate(face_roi, blocks=15)
+                annotated_frame[y1:y2, x1:x2] = anonymized_face
 
-    # Apply mask to original frame
-    result = cv2.bitwise_and(frame, frame, mask=mask)
-
-    # Find contours of green objects
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-
-        # Ignore tiny noise areas
-        if area > 500:
-            x, y, w, h = cv2.boundingRect(cnt)
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(frame, "Green Object", (x, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-    cv2.imshow("Green Detection", frame)
+    cv2.imshow("YOLO Face Anonymizer", annotated_frame)
+    frame_count += 1
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-cap.release()
+stream.release()
 cv2.destroyAllWindows()
