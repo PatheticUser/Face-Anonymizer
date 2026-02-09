@@ -1,12 +1,13 @@
 import cv2
 import threading
 from ultralytics import YOLO
+import tkinter as tk
+from tkinter import ttk
+from PIL import Image, ImageTk
 
 # -------------------------------
 # YOLO11 Model (nano)
 # -------------------------------
-# Note: use a YOLO11 model that includes 'person' class; we will filter faces only.
-# If you have a face-only YOLO model, use that instead.
 model = YOLO("yolo11n.pt")  # nano model for CPU
 
 # -------------------------------
@@ -41,65 +42,139 @@ class WebcamStream:
         self.cap.release()
 
 # -------------------------------
-# Anonymization function (pixelate)
+# Anonymization functions
 # -------------------------------
 def pixelate(face_roi, blocks=15):
-    # Shrink face
     h, w = face_roi.shape[:2]
     temp = cv2.resize(face_roi, (blocks, blocks), interpolation=cv2.INTER_LINEAR)
-    # Scale back to original size
     pixelated = cv2.resize(temp, (w, h), interpolation=cv2.INTER_NEAREST)
     return pixelated
 
+def blur(face_roi, ksize=15):
+    k = ksize if ksize % 2 == 1 else ksize+1
+    return cv2.GaussianBlur(face_roi, (k, k), 0)
+
+def blackbox(face_roi):
+    return 0 * face_roi
+
 # -------------------------------
-# Initialize webcam
+# Main GUI App
 # -------------------------------
-stream = WebcamStream()
-frame_skip = 3   # YOLO every 3 frames
-frame_count = 0
-last_results = None
+class FaceAnonymizerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Face Anonymizer")
+        self.root.geometry("700x500")
+        self.root.configure(bg="#222222")
 
-print("YOLO Face Anonymizer started")
+        # Video display
+        self.video_label = tk.Label(root)
+        self.video_label.pack(padx=10, pady=10)
 
-while True:
-    ret, frame = stream.read()
-    if not ret:
-        continue
+        # Controls
+        self.controls_frame = tk.Frame(root, bg="#333333")
+        self.controls_frame.pack(fill=tk.X, padx=10, pady=5)
 
-    # Resize frame for speed
-    frame_resized = cv2.resize(frame, (640, 360))
+        self.start_btn = ttk.Button(self.controls_frame, text="Start Camera", command=self.start_camera)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
+        self.stop_btn = ttk.Button(self.controls_frame, text="Stop Camera", command=self.stop_camera)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.toggle_btn = ttk.Button(self.controls_frame, text="Toggle Anonymization", command=self.toggle_anonymization)
+        self.toggle_btn.pack(side=tk.LEFT, padx=5)
 
-    # Run YOLO every N frames
-    if frame_count % frame_skip == 0:
-        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-        results = model(frame_rgb)[0]
-        last_results = results
+        # Mode selector
+        self.mode_var = tk.StringVar(value="pixelate")
+        self.mode_menu = ttk.OptionMenu(self.controls_frame, self.mode_var, "pixelate", "pixelate", "blur", "blackbox")
+        self.mode_menu.pack(side=tk.LEFT, padx=5)
 
-    annotated_frame = frame_resized.copy()
+        # Pixelation / blur slider
+        self.slider = ttk.Scale(self.controls_frame, from_=5, to=50, orient=tk.HORIZONTAL, command=self.update_slider)
+        self.slider.set(15)
+        self.slider.pack(side=tk.LEFT, padx=5)
+        self.slider_label = tk.Label(self.controls_frame, text="Value: 15", bg="#333333", fg="white")
+        self.slider_label.pack(side=tk.LEFT, padx=5)
 
-    # Process YOLO detections
-    if last_results is not None:
-        boxes = last_results.boxes.xyxy.cpu().numpy()  # xyxy format
-        classes = last_results.boxes.cls.cpu().numpy()  # class IDs
-        for i, cls in enumerate(classes):
-            # Filter only 'person' class (YOLO COCO class 0)
-            if int(cls) == 0:
-                x1, y1, x2, y2 = boxes[i].astype(int)
-                # Clip coordinates
-                x1, y1 = max(0, x1), max(0, y1)
-                x2, y2 = min(annotated_frame.shape[1]-1, x2), min(annotated_frame.shape[0]-1, y2)
-                face_roi = annotated_frame[y1:y2, x1:x2]
-                if face_roi.size == 0:
-                    continue
-                # Pixelate face
-                anonymized_face = pixelate(face_roi, blocks=15)
-                annotated_frame[y1:y2, x1:x2] = anonymized_face
+        # State
+        self.stream = None
+        self.running = False
+        self.anonymize = True
+        self.frame_count = 0
+        self.last_results = None
+        self.slider_value = 15
 
-    cv2.imshow("YOLO Face Anonymizer", annotated_frame)
-    frame_count += 1
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    def start_camera(self):
+        if self.stream is None:
+            self.stream = WebcamStream()
+            self.running = True
+            self.update_frame()
 
-stream.release()
-cv2.destroyAllWindows()
+    def stop_camera(self):
+        self.running = False
+        if self.stream:
+            self.stream.release()
+            self.stream = None
+            self.video_label.config(image='')
+
+    def toggle_anonymization(self):
+        self.anonymize = not self.anonymize
+
+    def update_slider(self, val):
+        self.slider_value = int(float(val))
+        self.slider_label.config(text=f"Value: {self.slider_value}")
+
+    def update_frame(self):
+        if self.running and self.stream:
+            ret, frame = self.stream.read()
+            if ret:
+                frame_resized = cv2.resize(frame, (640, 360))
+
+                # YOLO every 3 frames
+                if self.frame_count % 3 == 0:
+                    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                    self.last_results = model(frame_rgb)[0]
+
+                annotated_frame = frame_resized.copy()
+
+                if self.last_results is not None and self.anonymize:
+                    boxes = self.last_results.boxes.xyxy.cpu().numpy()
+                    classes = self.last_results.boxes.cls.cpu().numpy()
+                    for i, cls in enumerate(classes):
+                        if int(cls) == 0:
+                            x1, y1, x2, y2 = boxes[i].astype(int)
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(annotated_frame.shape[1]-1, x2), min(annotated_frame.shape[0]-1, y2)
+                            face_roi = annotated_frame[y1:y2, x1:x2]
+                            if face_roi.size == 0:
+                                continue
+                            mode = self.mode_var.get()
+                            if mode == "pixelate":
+                                anonymized = pixelate(face_roi, blocks=self.slider_value)
+                            elif mode == "blur":
+                                anonymized = blur(face_roi, ksize=self.slider_value)
+                            else:
+                                anonymized = blackbox(face_roi)
+                            annotated_frame[y1:y2, x1:x2] = anonymized
+
+                img = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(img)
+                imgtk = ImageTk.PhotoImage(image=img)
+                self.video_label.imgtk = imgtk
+                self.video_label.config(image=imgtk)
+
+                self.frame_count += 1
+
+            self.root.after(10, self.update_frame)
+
+    def on_close(self):
+        self.stop_camera()
+        self.root.destroy()
+
+# -------------------------------
+# Run app
+# -------------------------------
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = FaceAnonymizerApp(root)
+    root.mainloop()
