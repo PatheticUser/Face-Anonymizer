@@ -1,5 +1,5 @@
 
-# Face-Anonymizer 
+# Human-Anonymizer 
 
 A lightweight Python tool to automatically detect and anonymize faces in images and videos. Perfect for privacy-conscious developers, journalists, and content creators!  
 
@@ -20,8 +20,8 @@ A lightweight Python tool to automatically detect and anonymize faces in images 
 Clone the repository and install the required packages:
 
 ```bash
-git clone https://github.com/PatheticUser/Face-Anonymizer.git
-cd Face-Anonymizer
+git clone https://github.com/PatheticUser/Human-Anonymizer.git
+cd Human-Anonymizer
 pip install -r requirements.txt
 ````
 
@@ -72,7 +72,7 @@ python anonymize.py --input path/to/video.mp4 --output path/to/output.mp4 --meth
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/PatheticUser/Face-Anonymizer/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/PatheticUser/Human-Anonymizer/issues).
 
 1. Fork the repo
 2. Create a new branch (`git checkout -b feature-name`)
