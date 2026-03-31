@@ -22,7 +22,7 @@ Clone the repository and install the required packages:
 ```bash
 git clone https://github.com/PatheticUser/Human-Anonymizer.git
 cd Human-Anonymizer
-pip install -r requirements.txt
+uv sync
 ````
 
 > Make sure you have Python 3.7 or higher installed.
